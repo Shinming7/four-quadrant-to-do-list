@@ -150,6 +150,7 @@ function App() {
         continue
       }
       if (/[\u4e00-\u9fff\w]/.test(line)) {
+        if (!/[\u4e00-\u9fff]/.test(line) && /^[a-zA-Z\s.,;:'"!?()\-·]+$/.test(line)) continue
         cleaned.push(line)
       }
     }
@@ -235,8 +236,8 @@ function App() {
       let worker = ocrWorkerRef.current
       if (!worker) {
         setOcrStatus('正在准备识别模型…')
-        worker = await window.Tesseract.createWorker('chi_sim+eng', 1, { logger: (message) => setOcrStatus(`${message.status} ${Math.round(message.progress * 100)}%`) })
-        await worker.setParameters({ tessedit_pageseg_mode: '6', preserve_interword_spaces: '1' })
+        worker = await window.Tesseract.createWorker('chi_sim', 1, { logger: (message) => setOcrStatus(`${message.status} ${Math.round(message.progress * 100)}%`) })
+        await worker.setParameters({ tessedit_pageseg_mode: '6', tessedit_char_blacklist: 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ' })
         ocrWorkerRef.current = worker
       }
       setOcrStatus('正在识别…')
