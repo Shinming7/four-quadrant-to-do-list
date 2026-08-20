@@ -12,6 +12,9 @@ dist
 dist-ssr
 *.local
 
+# Test images (may contain sensitive content, keep out of git)
+test picture/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
