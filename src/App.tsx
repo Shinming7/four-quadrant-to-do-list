@@ -71,6 +71,7 @@ function App() {
   const [{ quadrants, tasks }, setBoard] = useState(readBoard)
   const [activeId, setActiveId] = useState<string | null>(null); const [layoutMode, setLayoutMode] = useState<LayoutMode>(() => readMode(LAYOUT_STORAGE_KEY, 'default', 'flow')); const [arrangementMode, setArrangementMode] = useState<ArrangementMode>(() => readMode(ARRANGEMENT_STORAGE_KEY, 'grid', 'stack'))
   const [ocrStatus, setOcrStatus] = useState(''); const [ocrError, setOcrError] = useState('')
+  const [pendingTitles, setPendingTitles] = useState<string[] | null>(null)
   const [deleting, setDeleting] = useState(false); const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const ocrWorkerRef = useRef<Awaited<ReturnType<NonNullable<Window['Tesseract']>['createWorker']>> | null>(null)
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 8 } })); const activeTask = useMemo(() => tasks.find((task) => task.id === activeId), [activeId, tasks])
@@ -102,10 +103,34 @@ function App() {
     setBoard((board) => ({ ...board, tasks: [] }))
     setSelectedIds(new Set())
   }
+  const updatePendingTitle = (index: number, title: string) => setPendingTitles((prev) => prev ? prev.map((item, i) => i === index ? title : item) : prev)
+  const removePendingTitle = (index: number) => setPendingTitles((prev) => prev ? prev.filter((_, i) => i !== index) : prev)
+  const confirmImport = () => {
+    if (!pendingTitles) return
+    const titles = pendingTitles.map((title) => title.trim()).filter(Boolean)
+    if (!titles.length) { setPendingTitles(null); return }
+    setBoard((board) => ({ ...board, tasks: [...board.tasks, ...titles.map((title, index) => ({ id: `ocr-${Date.now()}-${index}`, title, completed: false, quadrantId: INBOX_ID }))] }))
+    setPendingTitles(null)
+    setOcrStatus(`已导入 ${titles.length} 条到待分类`)
+    setTimeout(() => setOcrStatus(''), 4000)
+  }
   const handleDragStart = ({ active }: DragStartEvent) => setActiveId(String(active.id))
   const handleDragEnd = ({ active, over }: DragEndEvent) => {
     setActiveId(null); if (!over || active.id === over.id) return
     setBoard((board) => { const activeTask = board.tasks.find((task) => task.id === active.id); if (!activeTask) return board; const targetTask = board.tasks.find((task) => task.id === over.id); const areas = [inbox, ...board.quadrants]; const targetArea = areas.some((area) => area.id === over.id) ? String(over.id) : targetTask?.quadrantId; if (!targetArea) return board; const remaining = board.tasks.filter((task) => task.id !== active.id); const targetIndex = targetTask ? remaining.findIndex((task) => task.id === targetTask.id) : remaining.map((task) => task.quadrantId).lastIndexOf(targetArea) + 1; remaining.splice(Math.max(0, targetIndex), 0, { ...activeTask, quadrantId: targetArea }); return { ...board, tasks: remaining } })
+  }
+  async function upscaleImage(file: File): Promise<Blob | File> {
+    let bitmap: ImageBitmap
+    try { bitmap = await createImageBitmap(file) } catch { return file }
+    const maxEdge = Math.max(bitmap.width, bitmap.height)
+    if (maxEdge >= 2000) { bitmap.close(); return file }
+    const scale = 2000 / maxEdge
+    const canvas = document.createElement('canvas'); canvas.width = Math.round(bitmap.width * scale); canvas.height = Math.round(bitmap.height * scale)
+    const context = canvas.getContext('2d')
+    if (!context) { bitmap.close(); return file }
+    context.drawImage(bitmap, 0, 0, canvas.width, canvas.height)
+    bitmap.close()
+    return await new Promise<Blob>((resolve, reject) => canvas.toBlob((blob) => blob ? resolve(blob) : reject(new Error('图像处理失败'))))
   }
   const cleanOcrText = (text: string): string[] => {
     const lines = text.split(/\r?\n/)
@@ -135,6 +160,7 @@ function App() {
     if (!window.Tesseract) { setOcrError('OCR 模块加载失败，请刷新后重试'); return }
     setOcrStatus('正在准备识别…')
     try {
+      const image = await upscaleImage(file)
       let worker = ocrWorkerRef.current
       if (!worker) {
         setOcrStatus('正在准备识别模型…')
@@ -143,12 +169,11 @@ function App() {
         ocrWorkerRef.current = worker
       }
       setOcrStatus('正在识别…')
-      const result = await worker.recognize(file)
+      const result = await worker.recognize(image)
       const titles = cleanOcrText(result.data.text)
       if (!titles.length) throw new Error('没有识别到清单文字')
-      setBoard((board) => ({ ...board, tasks: [...board.tasks, ...titles.map((title, index) => ({ id: `ocr-${Date.now()}-${index}`, title, completed: false, quadrantId: INBOX_ID }))] }))
-      setOcrStatus(`已导入 ${titles.length} 条到待分类`)
-      setTimeout(() => setOcrStatus(''), 4000)
+      setPendingTitles(titles)
+      setOcrStatus(`识别到 ${titles.length} 条，请确认后导入`)
     } catch (error) {
       ocrWorkerRef.current = null
       setOcrStatus('')
@@ -156,6 +181,6 @@ function App() {
     }
   }
   const areas = [inbox, ...quadrants]
-  return <main className="app-shell"><div className="board-actions"><label className="upload-button"><span>识别图片</span><input type="file" accept="image/jpeg,image/png" capture="environment" onChange={(event) => { const file = event.target.files?.[0]; if (file) void importImage(file); event.currentTarget.value = '' }} /></label><button className={`delete-mode-button ${deleting ? 'is-active' : ''}`} type="button" onClick={toggleDeleting}>{deleting ? '完成' : '删除'}</button>{deleting && <button className="delete-selected-button" type="button" onClick={deleteSelected} disabled={selectedIds.size === 0}>删除选中 ({selectedIds.size})</button>}{deleting && <button className="clear-all-button" type="button" onClick={clearAllTasks}>全部清除</button>}<button className="add-quadrant-button" type="button" onClick={addQuadrant}>+ 新增象限</button><div className="switches"><div className="layout-switch" role="group" aria-label="选择象限排列"><span className="layout-switch__label">排列</span><button className={arrangementMode === 'grid' ? 'is-selected' : ''} type="button" onClick={() => setArrangementMode('grid')}>2×2</button><button className={arrangementMode === 'stack' ? 'is-selected' : ''} type="button" onClick={() => setArrangementMode('stack')}>纵向</button></div><div className="layout-switch" role="group" aria-label="选择象限排版"><span className="layout-switch__label">排版</span><button className={layoutMode === 'default' ? 'is-selected' : ''} type="button" onClick={() => setLayoutMode('default')}>默认</button><button className={layoutMode === 'flow' ? 'is-selected' : ''} type="button" onClick={() => setLayoutMode('flow')}>随任务量移动</button></div></div></div>{(ocrStatus || ocrError) && <p className={`ocr-message ${ocrError ? 'is-error' : ''}`}>{ocrError || ocrStatus}</p>}<DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd}><div className={`quadrant-grid quadrant-grid--${arrangementMode} ${layoutMode === 'flow' ? 'quadrant-grid--flow' : ''}`}>{areas.map((area) => { const areaTasks = tasks.filter((task) => task.quadrantId === area.id); return <AreaPanel key={area.id} area={area} tasks={areaTasks} onRename={area.id === INBOX_ID ? undefined : (name) => setBoard((board) => ({ ...board, quadrants: board.quadrants.map((item) => item.id === area.id ? { ...item, name } : item) }))} onAdd={() => addTask(area.id)} onToggle={handleTaskClick} onDelete={(id) => setBoard((board) => ({ ...board, tasks: board.tasks.filter((task) => task.id !== id) }))} onRemove={area.deletable ? () => removeQuadrant(area.id) : undefined} selecting={deleting} selectedIds={selectedIds} onSelectArea={() => toggleSelectArea(areaTasks)} /> })}</div><DragOverlay>{activeTask ? <TaskCard task={activeTask} /> : null}</DragOverlay></DndContext></main>
+  return <main className="app-shell"><div className="board-actions"><label className="upload-button"><span>识别图片</span><input type="file" accept="image/jpeg,image/png" capture="environment" onChange={(event) => { const file = event.target.files?.[0]; if (file) void importImage(file); event.currentTarget.value = '' }} /></label><button className={`delete-mode-button ${deleting ? 'is-active' : ''}`} type="button" onClick={toggleDeleting}>{deleting ? '完成' : '删除'}</button>{deleting && <button className="delete-selected-button" type="button" onClick={deleteSelected} disabled={selectedIds.size === 0}>删除选中 ({selectedIds.size})</button>}{deleting && <button className="clear-all-button" type="button" onClick={clearAllTasks}>全部清除</button>}<button className="add-quadrant-button" type="button" onClick={addQuadrant}>+ 新增象限</button><div className="switches"><div className="layout-switch" role="group" aria-label="选择象限排列"><span className="layout-switch__label">排列</span><button className={arrangementMode === 'grid' ? 'is-selected' : ''} type="button" onClick={() => setArrangementMode('grid')}>2×2</button><button className={arrangementMode === 'stack' ? 'is-selected' : ''} type="button" onClick={() => setArrangementMode('stack')}>纵向</button></div><div className="layout-switch" role="group" aria-label="选择象限排版"><span className="layout-switch__label">排版</span><button className={layoutMode === 'default' ? 'is-selected' : ''} type="button" onClick={() => setLayoutMode('default')}>默认</button><button className={layoutMode === 'flow' ? 'is-selected' : ''} type="button" onClick={() => setLayoutMode('flow')}>随任务量移动</button></div></div></div>{(ocrStatus || ocrError) && <p className={`ocr-message ${ocrError ? 'is-error' : ''}`}>{ocrError || ocrStatus}</p>}{pendingTitles && <div className="ocr-preview"><p className="ocr-preview__title">识别到 {pendingTitles.length} 条，可修改后导入：</p><div className="ocr-preview__list">{pendingTitles.map((title, index) => <div className="ocr-preview__row" key={index}><input value={title} onChange={(event) => updatePendingTitle(index, event.target.value)} /><button type="button" onClick={() => removePendingTitle(index)} aria-label="删除此行">×</button></div>)}</div><div className="ocr-preview__actions"><button type="button" onClick={confirmImport}>导入 ({pendingTitles.filter((title) => title.trim()).length})</button><button type="button" onClick={() => setPendingTitles(null)}>放弃</button></div></div>}<DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd}><div className={`quadrant-grid quadrant-grid--${arrangementMode} ${layoutMode === 'flow' ? 'quadrant-grid--flow' : ''}`}>{areas.map((area) => { const areaTasks = tasks.filter((task) => task.quadrantId === area.id); return <AreaPanel key={area.id} area={area} tasks={areaTasks} onRename={area.id === INBOX_ID ? undefined : (name) => setBoard((board) => ({ ...board, quadrants: board.quadrants.map((item) => item.id === area.id ? { ...item, name } : item) }))} onAdd={() => addTask(area.id)} onToggle={handleTaskClick} onDelete={(id) => setBoard((board) => ({ ...board, tasks: board.tasks.filter((task) => task.id !== id) }))} onRemove={area.deletable ? () => removeQuadrant(area.id) : undefined} selecting={deleting} selectedIds={selectedIds} onSelectArea={() => toggleSelectArea(areaTasks)} /> })}</div><DragOverlay>{activeTask ? <TaskCard task={activeTask} /> : null}</DragOverlay></DndContext></main>
 }
 export default App
