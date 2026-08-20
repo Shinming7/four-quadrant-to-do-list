@@ -155,6 +155,77 @@ function App() {
     }
     return cleaned.filter((line) => line.length >= 2)
   }
+  const KNOWN_FIXES: Record<string, string> = {
+    '伦酒': '花洒',
+  }
+  const CONFUSABLE_GROUPS: string[][] = [
+    ['洒', '酒'], ['芯', '必', '心'], ['干', '千'], ['己', '已', '巳'], ['未', '末'], ['日', '曰'],
+    ['白', '自', '百'], ['人', '入', '八'], ['大', '太', '犬'], ['王', '玉', '主'], ['士', '土'],
+    ['候', '侯'], ['拨', '拔'], ['幻', '幼'], ['茶', '荼'], ['崇', '祟'], ['辩', '辨', '辫'],
+    ['燥', '躁', '澡'], ['帐', '账'], ['厉', '历'], ['圆', '园'], ['幅', '辐'], ['货', '贷'],
+    ['购', '够'], ['票', '漂'], ['天', '夫'], ['元', '无'], ['手', '毛'], ['目', '日'], ['贝', '见'],
+    ['水', '永'], ['云', '去'], ['朵', '杂'], ['扬', '杨'], ['折', '拆'], ['蓝', '篮'], ['铃', '岭'],
+    ['钢', '刚'], ['碗', '婉'], ['钓', '钩'], ['设', '没'], ['充', '允'], ['暖', '缓'],
+    ['蛋', '旦', '但'], ['午', '牛'], ['板', '扳'], ['晴', '睛'], ['买', '卖'], ['井', '开'], ['用', '甩'],
+    ['戊', '戌', '戍'],
+  ]
+  const COMMON_WORDS: string[] = [
+    '花洒', '滤芯', '牙刷', '牙膏', '毛巾', '浴巾', '洗发水', '沐浴露', '洗衣液', '洗洁精', '纸巾', '抽纸', '卷纸',
+    '垃圾袋', '衣架', '拖把', '扫帚', '抹布', '水桶', '脸盆', '香皂', '肥皂', '洗手液', '拖鞋', '枕头', '被子', '床单',
+    '被套', '台灯', '灯泡', '插座', '电池', '充电器', '数据线', '耳机', '键盘', '鼠标', '文件夹', '笔记本', '签字笔',
+    '铅笔', '橡皮', '尺子', '订书机', '胶带', '剪刀', '美工刀', '螺丝刀', '扳手', '锤子', '钉子', '螺丝', '钳子',
+    '电饭煲', '电磁炉', '微波炉', '烤箱', '冰箱', '洗衣机', '空调', '风扇', '热水器', '电水壶', '水杯', '杯子', '碗',
+    '盘子', '筷子', '勺子', '炒锅', '蒸锅', '菜刀', '砧板', '洗菜篮', '大米', '面粉', '食用油', '酱油', '醋', '盐',
+    '糖', '料酒', '生抽', '老抽', '蚝油', '味精', '鸡精', '花椒', '八角', '辣椒', '葱', '姜', '蒜', '鸡蛋', '牛奶',
+    '酸奶', '面包', '馒头', '面条', '挂面', '方便面', '火腿肠', '香肠', '培根', '猪肉', '牛肉', '羊肉', '鸡肉', '鱼',
+    '虾', '土豆', '西红柿', '黄瓜', '白菜', '菠菜', '青菜', '芹菜', '萝卜', '胡萝卜', '洋葱', '茄子', '青椒', '蘑菇',
+    '香菇', '金针菇', '豆腐', '豆干', '豆浆', '苹果', '香蕉', '橙子', '梨', '葡萄', '西瓜', '桃', '草莓', '蓝莓',
+    '猕猴桃', '芒果', '柚子', '菠萝', '蜂蜜', '燕麦', '麦片', '饼干', '蛋糕', '糖果', '巧克力', '矿泉水', '可乐',
+    '雪碧', '果汁', '茶叶', '咖啡', '奶粉', '尿不湿', '湿巾', '洗面奶', '面膜', '防晒霜', '创可贴', '感冒药', '退烧药',
+    '消炎药', '维生素', '血压计', '体温计', '口罩', '消毒液', '酒精', '棉签', '收纳箱', '晾衣架', '洗衣粉', '柔顺剂',
+    '漂白剂', '洁厕灵', '玻璃水', '除湿盒', '香薰', '蜡烛', '蚊香', '花露水', '电蚊拍', '雨伞', '雨衣', '雨鞋', '帽子',
+    '围巾', '手套', '袜子', '鞋垫', '运动鞋', '帆布鞋', '牛仔裤', '卫衣', '外套', '羽绒服', '毛衣', '衬衫', '睡衣',
+    '腰带', '钱包', '背包', '行李箱', '眼镜', '太阳镜', '护理液', '手表', '梳子', '镜子', '指甲刀', '牙线', '剃须刀', '啤酒', '白酒', '红酒', '黄酒',
+    '整理', '打扫', '清洗', '维修', '购买', '预约', '缴费', '还款', '体检', '复查', '开会', '汇报', '总结', '规划',
+    '复习', '预习', '作业', '报告', '邮件', '快递', '退货', '换货', '发票', '报销', '办证', '续费', '充值', '加油',
+  ]
+  function levenshtein(a: string, b: string): number {
+    const rows = a.length + 1; const cols = b.length + 1
+    const matrix = Array.from({ length: rows }, () => new Uint8Array(cols))
+    for (let i = 0; i < rows; i++) matrix[i][0] = i
+    for (let j = 0; j < cols; j++) matrix[0][j] = j
+    for (let i = 1; i < rows; i++) {
+      for (let j = 1; j < cols; j++) {
+        const cost = a[i - 1] === b[j - 1] ? 0 : 1
+        matrix[i][j] = Math.min(matrix[i - 1][j] + 1, matrix[i][j - 1] + 1, matrix[i - 1][j - 1] + cost)
+      }
+    }
+    return matrix[rows - 1][cols - 1]
+  }
+  const correctOcrTitle = (title: string): string => {
+    const text = title.trim()
+    if (text.length < 2) return title
+    if (KNOWN_FIXES[text]) return KNOWN_FIXES[text]
+    if (COMMON_WORDS.includes(text)) return title
+    for (let i = 0; i < text.length; i++) {
+      const group = CONFUSABLE_GROUPS.find((candidates) => candidates.includes(text[i]))
+      if (!group) continue
+      for (const candidate of group) {
+        if (candidate === text[i]) continue
+        const replaced = text.slice(0, i) + candidate + text.slice(i + 1)
+        if (COMMON_WORDS.includes(replaced)) return replaced
+      }
+    }
+    if (text.length >= 3) {
+      let best: string | null = null; let bestDistance = Infinity
+      for (const word of COMMON_WORDS) {
+        const distance = levenshtein(text, word)
+        if (distance < bestDistance) { bestDistance = distance; best = word }
+      }
+      if (best && bestDistance <= 1) return best
+    }
+    return title
+  }
   const importImage = async (file: File) => {
     setOcrError('')
     if (!window.Tesseract) { setOcrError('OCR 模块加载失败，请刷新后重试'); return }
@@ -170,7 +241,7 @@ function App() {
       }
       setOcrStatus('正在识别…')
       const result = await worker.recognize(image)
-      const titles = cleanOcrText(result.data.text)
+      const titles = cleanOcrText(result.data.text).map((title) => correctOcrTitle(title))
       if (!titles.length) throw new Error('没有识别到清单文字')
       setPendingTitles(titles)
       setOcrStatus(`识别到 ${titles.length} 条，请确认后导入`)
