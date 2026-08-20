@@ -127,7 +127,9 @@ function App() {
     let sum = 0; for (let i = 0; i < processed.length; i++) sum += processed[i]
     if (sum / processed.length < 128) for (let i = 0; i < processed.length; i++) processed[i] = 255 - processed[i]
     const grayCanvas = document.createElement('canvas'); grayCanvas.width = width; grayCanvas.height = height
-    grayCanvas.getContext('2d')!.putImageData(new ImageData(new Uint8ClampedArray(processed), width, height), 0, 0)
+    const grayPixels = new Uint8ClampedArray(width * height * 4)
+    for (let i = 0, j = 0; i < grayPixels.length; i += 4, j++) { grayPixels[i] = processed[j]; grayPixels[i + 1] = processed[j]; grayPixels[i + 2] = processed[j]; grayPixels[i + 3] = 255 }
+    grayCanvas.getContext('2d')!.putImageData(new ImageData(grayPixels, width, height), 0, 0)
     const bgCanvas = document.createElement('canvas'); bgCanvas.width = 64; bgCanvas.height = 64
     const bgContext = bgCanvas.getContext('2d', { willReadFrequently: true })
     if (!bgContext) throw new Error('图像处理失败')
