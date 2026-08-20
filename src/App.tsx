@@ -260,7 +260,45 @@ function App() {
       setOcrError(error instanceof Error ? error.message : '识别失败，请重试')
     }
   }
+  const importImageGlm = async (file: File) => {
+    setOcrError('')
+    setOcrStatus('正在调用智能识别…')
+    try {
+      const dataUrl = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader()
+        reader.onload = () => resolve(String(reader.result))
+        reader.onerror = () => reject(new Error('读取图片失败'))
+        reader.readAsDataURL(file)
+      })
+      const host = window.location.hostname || '127.0.0.1'
+      let response: Response
+      try {
+        response = await fetch(`http://${host}:8787/api/ocr`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            image: dataUrl,
+            prompt: '这是一张手写的待办/购物清单照片。请逐行准确提取图中全部文字，保持原有顺序和内容，每行一条，不要遗漏、不要推测、不要添加任何说明。直接输出清单内容。',
+          }),
+        })
+      } catch {
+        throw new Error('无法连接智能识别服务，请先运行“启动待办清单.bat”并确认代理已启动')
+      }
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}))
+        throw new Error(data?.error || `智能识别服务返回 ${response.status}`)
+      }
+      const data = await response.json()
+      const titles = cleanOcrText(data.text ?? '').map((title) => correctOcrTitle(title))
+      if (!titles.length) throw new Error('没有识别到清单文字')
+      setPendingTitles(titles)
+      setOcrStatus(`智能识别到 ${titles.length} 条，请确认后导入`)
+    } catch (error) {
+      setOcrStatus('')
+      setOcrError(error instanceof Error ? error.message : '智能识别失败，请重试')
+    }
+  }
   const areas = [inbox, ...quadrants]
-  return <main className="app-shell"><div className="board-actions"><label className="upload-button"><span>识别图片</span><input type="file" accept="image/jpeg,image/png" capture="environment" onChange={(event) => { const file = event.target.files?.[0]; if (file) void importImage(file); event.currentTarget.value = '' }} /></label><button className={`delete-mode-button ${deleting ? 'is-active' : ''}`} type="button" onClick={toggleDeleting}>{deleting ? '完成' : '删除'}</button>{deleting && <button className="delete-selected-button" type="button" onClick={deleteSelected} disabled={selectedIds.size === 0}>删除选中 ({selectedIds.size})</button>}{deleting && <button className="clear-all-button" type="button" onClick={clearAllTasks}>全部清除</button>}<button className="add-quadrant-button" type="button" onClick={addQuadrant}>+ 新增象限</button><div className="switches"><div className="layout-switch" role="group" aria-label="选择象限排列"><span className="layout-switch__label">排列</span><button className={arrangementMode === 'grid' ? 'is-selected' : ''} type="button" onClick={() => setArrangementMode('grid')}>2×2</button><button className={arrangementMode === 'stack' ? 'is-selected' : ''} type="button" onClick={() => setArrangementMode('stack')}>纵向</button></div><div className="layout-switch" role="group" aria-label="选择象限排版"><span className="layout-switch__label">排版</span><button className={layoutMode === 'default' ? 'is-selected' : ''} type="button" onClick={() => setLayoutMode('default')}>默认</button><button className={layoutMode === 'flow' ? 'is-selected' : ''} type="button" onClick={() => setLayoutMode('flow')}>随任务量移动</button></div></div></div>{(ocrStatus || ocrError) && <p className={`ocr-message ${ocrError ? 'is-error' : ''}`}>{ocrError || ocrStatus}</p>}{pendingTitles && <div className="ocr-preview"><p className="ocr-preview__title">识别到 {pendingTitles.length} 条，可修改后导入：</p><div className="ocr-preview__list">{pendingTitles.map((title, index) => <div className="ocr-preview__row" key={index}><input value={title} onChange={(event) => updatePendingTitle(index, event.target.value)} /><button type="button" onClick={() => removePendingTitle(index)} aria-label="删除此行">×</button></div>)}</div><div className="ocr-preview__actions"><button type="button" onClick={confirmImport}>导入 ({pendingTitles.filter((title) => title.trim()).length})</button><button type="button" onClick={() => setPendingTitles(null)}>放弃</button></div></div>}<DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd}><div className={`quadrant-grid quadrant-grid--${arrangementMode} ${layoutMode === 'flow' ? 'quadrant-grid--flow' : ''}`}>{areas.map((area) => { const areaTasks = tasks.filter((task) => task.quadrantId === area.id); return <AreaPanel key={area.id} area={area} tasks={areaTasks} onRename={area.id === INBOX_ID ? undefined : (name) => setBoard((board) => ({ ...board, quadrants: board.quadrants.map((item) => item.id === area.id ? { ...item, name } : item) }))} onAdd={() => addTask(area.id)} onToggle={handleTaskClick} onDelete={(id) => setBoard((board) => ({ ...board, tasks: board.tasks.filter((task) => task.id !== id) }))} onRemove={area.deletable ? () => removeQuadrant(area.id) : undefined} selecting={deleting} selectedIds={selectedIds} onSelectArea={() => toggleSelectArea(areaTasks)} /> })}</div><DragOverlay>{activeTask ? <TaskCard task={activeTask} /> : null}</DragOverlay></DndContext></main>
+  return <main className="app-shell"><div className="board-actions"><label className="upload-button"><span>识别图片</span><input type="file" accept="image/jpeg,image/png" capture="environment" onChange={(event) => { const file = event.target.files?.[0]; if (file) void importImage(file); event.currentTarget.value = '' }} /></label><label className="upload-button upload-button--glm"><span>智能识别</span><input type="file" accept="image/jpeg,image/png" capture="environment" onChange={(event) => { const file = event.target.files?.[0]; if (file) void importImageGlm(file); event.currentTarget.value = '' }} /></label><button className={`delete-mode-button ${deleting ? 'is-active' : ''}`} type="button" onClick={toggleDeleting}>{deleting ? '完成' : '删除'}</button>{deleting && <button className="delete-selected-button" type="button" onClick={deleteSelected} disabled={selectedIds.size === 0}>删除选中 ({selectedIds.size})</button>}{deleting && <button className="clear-all-button" type="button" onClick={clearAllTasks}>全部清除</button>}<button className="add-quadrant-button" type="button" onClick={addQuadrant}>+ 新增象限</button><div className="switches"><div className="layout-switch" role="group" aria-label="选择象限排列"><span className="layout-switch__label">排列</span><button className={arrangementMode === 'grid' ? 'is-selected' : ''} type="button" onClick={() => setArrangementMode('grid')}>2×2</button><button className={arrangementMode === 'stack' ? 'is-selected' : ''} type="button" onClick={() => setArrangementMode('stack')}>纵向</button></div><div className="layout-switch" role="group" aria-label="选择象限排版"><span className="layout-switch__label">排版</span><button className={layoutMode === 'default' ? 'is-selected' : ''} type="button" onClick={() => setLayoutMode('default')}>默认</button><button className={layoutMode === 'flow' ? 'is-selected' : ''} type="button" onClick={() => setLayoutMode('flow')}>随任务量移动</button></div></div></div>{(ocrStatus || ocrError) && <p className={`ocr-message ${ocrError ? 'is-error' : ''}`}>{ocrError || ocrStatus}</p>}{pendingTitles && <div className="ocr-preview"><p className="ocr-preview__title">识别到 {pendingTitles.length} 条，可修改后导入：</p><div className="ocr-preview__list">{pendingTitles.map((title, index) => <div className="ocr-preview__row" key={index}><input value={title} onChange={(event) => updatePendingTitle(index, event.target.value)} /><button type="button" onClick={() => removePendingTitle(index)} aria-label="删除此行">×</button></div>)}</div><div className="ocr-preview__actions"><button type="button" onClick={confirmImport}>导入 ({pendingTitles.filter((title) => title.trim()).length})</button><button type="button" onClick={() => setPendingTitles(null)}>放弃</button></div></div>}<DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd}><div className={`quadrant-grid quadrant-grid--${arrangementMode} ${layoutMode === 'flow' ? 'quadrant-grid--flow' : ''}`}>{areas.map((area) => { const areaTasks = tasks.filter((task) => task.quadrantId === area.id); return <AreaPanel key={area.id} area={area} tasks={areaTasks} onRename={area.id === INBOX_ID ? undefined : (name) => setBoard((board) => ({ ...board, quadrants: board.quadrants.map((item) => item.id === area.id ? { ...item, name } : item) }))} onAdd={() => addTask(area.id)} onToggle={handleTaskClick} onDelete={(id) => setBoard((board) => ({ ...board, tasks: board.tasks.filter((task) => task.id !== id) }))} onRemove={area.deletable ? () => removeQuadrant(area.id) : undefined} selecting={deleting} selectedIds={selectedIds} onSelectArea={() => toggleSelectArea(areaTasks)} /> })}</div><DragOverlay>{activeTask ? <TaskCard task={activeTask} /> : null}</DragOverlay></DndContext></main>
 }
 export default App
