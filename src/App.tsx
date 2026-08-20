@@ -7,7 +7,9 @@ import './App.css'
 
 type Task = { id: string; title: string; completed: boolean; quadrantId: string }
 type Quadrant = { id: string; name: string; tone: string }
+type LayoutMode = 'default' | 'flow'
 const STORAGE_KEY = 'quadrant-board-v1'
+const LAYOUT_STORAGE_KEY = 'quadrant-layout-mode'
 const defaultQuadrants: Quadrant[] = [
   { id: 'q1', name: '重要且紧急', tone: 'coral' },
   { id: 'q2', name: '重要不紧急', tone: 'blue' },
@@ -26,6 +28,9 @@ function readBoard() {
 function saveBoard(board: { quadrants: Quadrant[]; tasks: Task[] }) {
   try { localStorage.setItem(STORAGE_KEY, JSON.stringify(board)) } catch { /* file previews may disable storage */ }
 }
+function readLayoutMode(): LayoutMode {
+  try { return localStorage.getItem(LAYOUT_STORAGE_KEY) === 'flow' ? 'flow' : 'default' } catch { return 'default' }
+}
 function TaskCard({ task, onToggle, onDelete }: { task: Task; onToggle: () => void; onDelete: () => void }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: task.id })
   const style = { transform: CSS.Transform.toString(transform), transition }
@@ -43,8 +48,10 @@ function QuadrantPanel({ quadrant, tasks, onRename, onAdd, onToggle, onDelete }:
 }
 function App() {
   const [{ quadrants, tasks }, setBoard] = useState(readBoard); const [activeId, setActiveId] = useState<string | null>(null)
+  const [layoutMode, setLayoutMode] = useState<LayoutMode>(readLayoutMode)
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 8 } })); const activeTask = useMemo(() => tasks.find((task) => task.id === activeId), [activeId, tasks])
   useEffect(() => { saveBoard({ quadrants, tasks }) }, [quadrants, tasks])
+  useEffect(() => { try { localStorage.setItem(LAYOUT_STORAGE_KEY, layoutMode) } catch { /* file previews may disable storage */ } }, [layoutMode])
   const updateTask = (id: string, update: Partial<Task>) => setBoard((board) => ({ ...board, tasks: board.tasks.map((task) => task.id === id ? { ...task, ...update } : task) }))
   const addTask = (quadrantId: string) => { const title = window.prompt('任务名称')?.trim(); if (!title) return; setBoard((board) => ({ ...board, tasks: [...board.tasks, { id: `task-${Date.now()}`, title, completed: false, quadrantId }] })) }
   const handleDragStart = ({ active }: DragStartEvent) => setActiveId(String(active.id))
@@ -64,6 +71,6 @@ function App() {
       return { ...board, tasks: remaining }
     })
   }
-  return <main className="app-shell"><DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd}><div className="quadrant-grid">{quadrants.map((quadrant) => <QuadrantPanel key={quadrant.id} quadrant={quadrant} tasks={tasks.filter((task) => task.quadrantId === quadrant.id)} onRename={(name) => setBoard((board) => ({ ...board, quadrants: board.quadrants.map((item) => item.id === quadrant.id ? { ...item, name } : item) }))} onAdd={() => addTask(quadrant.id)} onToggle={(id) => updateTask(id, { completed: !tasks.find((task) => task.id === id)?.completed })} onDelete={(id) => setBoard((board) => ({ ...board, tasks: board.tasks.filter((task) => task.id !== id) }))} />)}</div><DragOverlay>{activeTask ? <TaskCard task={activeTask} onToggle={() => undefined} onDelete={() => undefined} /> : null}</DragOverlay></DndContext></main>
+  return <main className="app-shell"><div className="layout-switch" role="group" aria-label="选择象限排版"><span className="layout-switch__label">排版</span><button className={layoutMode === 'default' ? 'is-selected' : ''} type="button" onClick={() => setLayoutMode('default')} aria-pressed={layoutMode === 'default'}>默认</button><button className={layoutMode === 'flow' ? 'is-selected' : ''} type="button" onClick={() => setLayoutMode('flow')} aria-pressed={layoutMode === 'flow'}>随任务量移动</button></div><DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd}><div className={`quadrant-grid ${layoutMode === 'flow' ? 'quadrant-grid--flow' : ''}`}>{quadrants.map((quadrant) => <QuadrantPanel key={quadrant.id} quadrant={quadrant} tasks={tasks.filter((task) => task.quadrantId === quadrant.id)} onRename={(name) => setBoard((board) => ({ ...board, quadrants: board.quadrants.map((item) => item.id === quadrant.id ? { ...item, name } : item) }))} onAdd={() => addTask(quadrant.id)} onToggle={(id) => updateTask(id, { completed: !tasks.find((task) => task.id === id)?.completed })} onDelete={(id) => setBoard((board) => ({ ...board, tasks: board.tasks.filter((task) => task.id !== id) }))} />)}</div><DragOverlay>{activeTask ? <TaskCard task={activeTask} onToggle={() => undefined} onDelete={() => undefined} /> : null}</DragOverlay></DndContext></main>
 }
 export default App
