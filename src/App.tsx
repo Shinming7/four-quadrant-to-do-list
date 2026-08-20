@@ -14,8 +14,6 @@ const INBOX_ID = 'inbox'
 const STORAGE_KEY = 'quadrant-board-v2'
 const LAYOUT_STORAGE_KEY = 'quadrant-layout-mode'
 const ARRANGEMENT_STORAGE_KEY = 'quadrant-arrangement-mode'
-const MAX_IMAGE_EDGE = 1800
-const MIN_IMAGE_EDGE = 1200
 const defaultQuadrants: Quadrant[] = [
   { id: 'q1', name: '重要且紧急', tone: 'coral', deletable: true },
   { id: 'q2', name: '重要不紧急', tone: 'blue', deletable: true },
@@ -85,73 +83,6 @@ function App() {
     setActiveId(null); if (!over || active.id === over.id) return
     setBoard((board) => { const activeTask = board.tasks.find((task) => task.id === active.id); if (!activeTask) return board; const targetTask = board.tasks.find((task) => task.id === over.id); const areas = [inbox, ...board.quadrants]; const targetArea = areas.some((area) => area.id === over.id) ? String(over.id) : targetTask?.quadrantId; if (!targetArea) return board; const remaining = board.tasks.filter((task) => task.id !== active.id); const targetIndex = targetTask ? remaining.findIndex((task) => task.id === targetTask.id) : remaining.map((task) => task.quadrantId).lastIndexOf(targetArea) + 1; remaining.splice(Math.max(0, targetIndex), 0, { ...activeTask, quadrantId: targetArea }); return { ...board, tasks: remaining } })
   }
-  function medianFilter(gray: Uint8Array, width: number, height: number): Uint8Array {
-    const out = new Uint8Array(gray.length); const neighbors = new Uint8Array(9)
-    for (let y = 0; y < height; y++) {
-      const y0 = Math.max(0, y - 1); const y1 = Math.min(height - 1, y + 1)
-      for (let x = 0; x < width; x++) {
-        const x0 = Math.max(0, x - 1); const x1 = Math.min(width - 1, x + 1)
-        let k = 0
-        for (let yy = y0; yy <= y1; yy++) for (let xx = x0; xx <= x1; xx++) neighbors[k++] = gray[yy * width + xx]
-        for (let i = 1; i < k; i++) { const value = neighbors[i]; let j = i - 1; while (j >= 0 && neighbors[j] > value) { neighbors[j + 1] = neighbors[j]; j-- } neighbors[j + 1] = value }
-        out[y * width + x] = neighbors[k >> 1]
-      }
-    }
-    return out
-  }
-  function stretchContrast(gray: Uint8Array): Uint8Array {
-    const hist = new Uint32Array(256); const out = new Uint8Array(gray.length)
-    for (let i = 0; i < gray.length; i++) hist[gray[i]]++
-    let acc = 0; let low = 0; const p1 = Math.floor(gray.length * 0.01)
-    while (low < 255 && acc < p1) { acc += hist[low]; low++ }
-    let high = 255; acc = 0; const p99 = Math.floor(gray.length * 0.99)
-    while (high > 0 && acc < gray.length - p99) { acc += hist[high]; high-- }
-    if (high <= low) return gray
-    const scale = 255 / (high - low)
-    for (let i = 0; i < gray.length; i++) { const value = (gray[i] - low) * scale; out[i] = value < 0 ? 0 : value > 255 ? 255 : value | 0 }
-    return out
-  }
-  async function preprocessImage(file: File): Promise<Blob> {
-    const bitmap = await createImageBitmap(file)
-    const originalEdge = Math.max(bitmap.width, bitmap.height)
-    const scale = originalEdge < MIN_IMAGE_EDGE ? MIN_IMAGE_EDGE / originalEdge : Math.min(1, MAX_IMAGE_EDGE / originalEdge)
-    const width = Math.max(1, Math.round(bitmap.width * scale)); const height = Math.max(1, Math.round(bitmap.height * scale))
-    const canvas = document.createElement('canvas'); canvas.width = width; canvas.height = height
-    const context = canvas.getContext('2d', { willReadFrequently: true })
-    if (!context) throw new Error('图像处理失败')
-    context.drawImage(bitmap, 0, 0, width, height)
-    const source = context.getImageData(0, 0, width, height)
-    const gray = new Uint8Array(width * height)
-    for (let i = 0, j = 0; i < source.data.length; i += 4, j++) gray[j] = (source.data[i] * 0.299 + source.data[i + 1] * 0.587 + source.data[i + 2] * 0.114 + 0.5) | 0
-    let processed = medianFilter(gray, width, height)
-    let sum = 0; for (let i = 0; i < processed.length; i++) sum += processed[i]
-    if (sum / processed.length < 128) for (let i = 0; i < processed.length; i++) processed[i] = 255 - processed[i]
-    const grayCanvas = document.createElement('canvas'); grayCanvas.width = width; grayCanvas.height = height
-    const grayPixels = new Uint8ClampedArray(width * height * 4)
-    for (let i = 0, j = 0; i < grayPixels.length; i += 4, j++) { grayPixels[i] = processed[j]; grayPixels[i + 1] = processed[j]; grayPixels[i + 2] = processed[j]; grayPixels[i + 3] = 255 }
-    grayCanvas.getContext('2d')!.putImageData(new ImageData(grayPixels, width, height), 0, 0)
-    const bgCanvas = document.createElement('canvas'); bgCanvas.width = 64; bgCanvas.height = 64
-    const bgContext = bgCanvas.getContext('2d', { willReadFrequently: true })
-    if (!bgContext) throw new Error('图像处理失败')
-    bgContext.drawImage(grayCanvas, 0, 0, 64, 64)
-    const background = bgContext.getImageData(0, 0, 64, 64).data
-    const normalized = new Uint8Array(processed.length)
-    for (let y = 0; y < height; y++) {
-      const by = Math.min(63, (y * 64 / height) | 0)
-      for (let x = 0; x < width; x++) {
-        const bx = Math.min(63, (x * 64 / width) | 0)
-        const bg = Math.max(16, background[(by * 64 + bx) * 4])
-        const value = 255 * processed[y * width + x] / bg
-        normalized[y * width + x] = value > 255 ? 255 : value | 0
-      }
-    }
-    processed = stretchContrast(normalized)
-    const output = context.createImageData(width, height)
-    for (let i = 0, j = 0; i < output.data.length; i += 4, j++) { output.data[i] = processed[j]; output.data[i + 1] = processed[j]; output.data[i + 2] = processed[j]; output.data[i + 3] = 255 }
-    context.putImageData(output, 0, 0)
-    bitmap.close()
-    return await new Promise<Blob>((resolve, reject) => canvas.toBlob((blob) => blob ? resolve(blob) : reject(new Error('图像处理失败'))))
-  }
   const cleanOcrText = (text: string): string[] => {
     const lines = text.split(/\r?\n/)
     const cleaned: string[] = []
@@ -160,8 +91,11 @@ function App() {
       if (!line) continue
       line = line.replace(/^\s*[-*•·\d.、【】[\]()（）]+\s*/, '').trim()
       if (!line || line.length < 2) continue
-      line = line.replace(/\s+/g, ' ')
-      line = line.replace(/([\u4e00-\u9fff])\s+(?=[\u4e00-\u9fff])/g, '$1')
+      let previous = ''
+      while (previous !== line) {
+        previous = line
+        line = line.replace(/([\u4e00-\u9fff])(?:[\s\-_·•*|/\\])+(?=[\u4e00-\u9fff])/g, '$1')
+      }
       if (cleaned.length > 0 && line.length <= 4 && /^[、，。；：？！,.:;?!]/.test(line)) {
         cleaned[cleaned.length - 1] += line
         continue
@@ -175,18 +109,17 @@ function App() {
   const importImage = async (file: File) => {
     setOcrError('')
     if (!window.Tesseract) { setOcrError('OCR 模块加载失败，请刷新后重试'); return }
-    setOcrStatus('正在处理图片…')
+    setOcrStatus('正在准备识别…')
     try {
-      const image = await preprocessImage(file)
       let worker = ocrWorkerRef.current
       if (!worker) {
         setOcrStatus('正在准备识别模型…')
         worker = await window.Tesseract.createWorker('chi_sim+eng', 1, { logger: (message) => setOcrStatus(`${message.status} ${Math.round(message.progress * 100)}%`) })
-        await worker.setParameters({ user_defined_dpi: '300', preserve_interword_spaces: '1' })
+        await worker.setParameters({ tessedit_pageseg_mode: '6', preserve_interword_spaces: '1' })
         ocrWorkerRef.current = worker
       }
       setOcrStatus('正在识别…')
-      const result = await worker.recognize(image)
+      const result = await worker.recognize(file)
       const titles = cleanOcrText(result.data.text)
       if (!titles.length) throw new Error('没有识别到清单文字')
       setBoard((board) => ({ ...board, tasks: [...board.tasks, ...titles.map((title, index) => ({ id: `ocr-${Date.now()}-${index}`, title, completed: false, quadrantId: INBOX_ID }))] }))
