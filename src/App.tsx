@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { DndContext, DragOverlay, PointerSensor, useDroppable, useSensor, useSensors } from '@dnd-kit/core'
+import { DndContext, DragOverlay, PointerSensor, useDraggable, useDroppable, useSensor, useSensors } from '@dnd-kit/core'
 import type { DragEndEvent, DragStartEvent } from '@dnd-kit/core'
 import { SortableContext, rectSortingStrategy, useSortable } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
@@ -11,6 +11,7 @@ type Board = { quadrants: Quadrant[]; tasks: Task[] }
 type LayoutMode = 'default' | 'stacked'
 type ArrangementMode = 'grid' | 'stack'
 const INBOX_ID = 'inbox'
+const GROUP_ID = '__group__'
 const STORAGE_KEY = 'quadrant-board-v2'
 const LAYOUT_STORAGE_KEY = 'quadrant-layout-mode'
 const ARRANGEMENT_STORAGE_KEY = 'quadrant-arrangement-mode'
@@ -52,19 +53,29 @@ function readBoard(): Board {
 }
 function saveBoard(board: Board) { try { localStorage.setItem(STORAGE_KEY, JSON.stringify(board)) } catch { /* storage may be unavailable */ } }
 function readMode<T extends string>(key: string, fallback: T, value: T): T { try { return localStorage.getItem(key) === value ? value : fallback } catch { return fallback } }
-function TaskCard({ task, onToggle, onDelete, selecting, selected }: { task: Task; onToggle?: () => void; onDelete?: () => void; selecting?: boolean; selected?: boolean }) {
+function TaskCard({ task, onToggle, onDelete, selecting, selected, onLongPress }: { task: Task; onToggle?: () => void; onDelete?: () => void; selecting?: boolean; selected?: boolean; onLongPress?: (id: string) => void }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: task.id })
-  return <article ref={setNodeRef} style={{ transform: CSS.Transform.toString(transform), transition }} {...listeners} {...attributes} className={`task-card ${task.completed ? 'is-complete' : ''} ${isDragging ? 'is-dragging' : ''} ${selecting ? 'is-selecting' : ''} ${selected ? 'is-selected' : ''}`} onClick={onToggle}>
+  const longPressTimer = useRef<number | null>(null); const suppressClick = useRef(false)
+  const startLongPress = () => {
+    if (!onLongPress) return
+    longPressTimer.current = window.setTimeout(() => { longPressTimer.current = null; suppressClick.current = true; onLongPress(task.id) }, 600)
+  }
+  const cancelLongPress = () => { if (longPressTimer.current !== null) { window.clearTimeout(longPressTimer.current); longPressTimer.current = null } }
+  return <article ref={setNodeRef} style={{ transform: CSS.Transform.toString(transform), transition }} {...listeners} {...attributes} onPointerDownCapture={selecting ? startLongPress : undefined} onPointerUpCapture={selecting ? cancelLongPress : undefined} onPointerMoveCapture={selecting ? cancelLongPress : undefined} onPointerCancel={selecting ? cancelLongPress : undefined} className={`task-card ${task.completed ? 'is-complete' : ''} ${isDragging ? 'is-dragging' : ''} ${selecting ? 'is-selecting' : ''} ${selected ? 'is-selected' : ''}`} onClick={() => { if (suppressClick.current) { suppressClick.current = false; return } onToggle?.() }}>
     {selecting && <span className="task-check">{selected ? '✓' : ''}</span>}<p className="task-title">{task.title}</p>{!selecting && onDelete && <button className="delete-button" type="button" onClick={(event) => { event.stopPropagation(); onDelete() }} aria-label="删除任务">×</button>}
   </article>
 }
-function AreaPanel({ area, tasks, onRename, onAdd, onToggle, onDelete, onRemove, selecting, selectedIds, onSelectArea, stacked, expanded, onToggleExpand }: { area: Quadrant; tasks: Task[]; onRename?: (name: string) => void; onAdd: () => void; onToggle: (id: string) => void; onDelete: (id: string) => void; onRemove?: () => void; selecting?: boolean; selectedIds: Set<string>; onSelectArea: () => void; stacked?: boolean; expanded?: boolean; onToggleExpand?: () => void }) {
+function GroupCard({ count, onCancel }: { count: number; onCancel: () => void }) {
+  const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({ id: GROUP_ID })
+  return <button ref={setNodeRef} {...listeners} {...attributes} type="button" className={`group-card ${isDragging ? 'is-dragging' : ''}`} style={{ transform: CSS.Transform.toString(transform) }} onClick={(event) => { event.stopPropagation(); onCancel() }}><span className="group-card__icon">◧</span>已选 {count} 条 · 拖拽到其他象限</button>
+}
+function AreaPanel({ area, tasks, onRename, onAdd, onToggle, onDelete, onRemove, selecting, selectedIds, onSelectArea, stacked, expanded, onToggleExpand, grouped, groupedIds, groupAnchor, onCancelGroup, onLongPress }: { area: Quadrant; tasks: Task[]; onRename?: (name: string) => void; onAdd: () => void; onToggle: (id: string) => void; onDelete: (id: string) => void; onRemove?: () => void; selecting?: boolean; selectedIds: Set<string>; onSelectArea: () => void; stacked?: boolean; expanded?: boolean; onToggleExpand?: () => void; grouped?: boolean; groupedIds: string[]; groupAnchor?: string | null; onCancelGroup: () => void; onLongPress: (id: string) => void }) {
   const { setNodeRef, isOver } = useDroppable({ id: area.id }); const [editing, setEditing] = useState(false); const [name, setName] = useState(area.name)
   const saveName = () => { const next = name.trim() || area.name; setName(next); onRename?.(next); setEditing(false) }
   const allSelected = tasks.length > 0 && tasks.every((task) => selectedIds.has(task.id))
   return <section ref={setNodeRef} className={`quadrant-panel quadrant-panel--${area.tone} ${area.id === INBOX_ID ? 'is-inbox' : ''} ${isOver ? 'is-over' : ''} ${selecting ? 'is-selecting-area' : ''} ${stacked ? (expanded ? 'is-expanded' : 'is-collapsed') : ''}`}>
     <header className="quadrant-header" onClick={stacked && onToggleExpand ? (event) => { event.stopPropagation(); onToggleExpand() } : undefined}>{stacked && <span className="stack-count">{tasks.length} 条</span>}<div className="quadrant-heading"><span className="quadrant-dot" />{editing ? <input autoFocus value={name} onClick={(event) => event.stopPropagation()} onChange={(event) => setName(event.target.value)} onBlur={saveName} onKeyDown={(event) => event.key === 'Enter' && saveName()} /> : <button className="quadrant-name" type="button" onClick={(event) => { event.stopPropagation(); if (onRename) setEditing(true) }}>{area.name}</button>}</div>{selecting && <button className="select-area" type="button" onClick={(event) => { event.stopPropagation(); onSelectArea() }}>{allSelected ? '取消全选' : '全选'}</button>}{onRemove && <button className="remove-quadrant" type="button" onClick={onRemove} aria-label="删除象限">×</button>}{stacked && <span className="stack-toggle">{expanded ? '▾' : '▸'}</span>}</header>
-    <SortableContext items={tasks.map((task) => task.id)} strategy={rectSortingStrategy}><div className="task-list">{tasks.map((task) => <TaskCard key={task.id} task={task} onToggle={() => onToggle(task.id)} onDelete={() => onDelete(task.id)} selecting={selecting} selected={selectedIds.has(task.id)} />)}{!selecting && <button className="add-task" type="button" onClick={onAdd}><span>+</span> 添加词条</button>}</div></SortableContext>
+    <SortableContext items={tasks.map((task) => task.id)} strategy={rectSortingStrategy}><div className="task-list">{tasks.map((task) => { if (grouped && groupedIds.includes(task.id)) return null; return <TaskCard key={task.id} task={task} onToggle={() => onToggle(task.id)} onDelete={() => onDelete(task.id)} selecting={selecting} selected={selectedIds.has(task.id)} onLongPress={onLongPress} /> })}{grouped && groupAnchor === area.id && <GroupCard count={groupedIds.length} onCancel={onCancelGroup} />}{!selecting && <button className="add-task" type="button" onClick={onAdd}><span>+</span> 添加词条</button>}</div></SortableContext>
   </section>
 }
 function App() {
@@ -74,6 +85,7 @@ function App() {
   const [pendingTitles, setPendingTitles] = useState<string[] | null>(null)
   const [deleting, setDeleting] = useState(false); const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [expandedAreas, setExpandedAreas] = useState<Set<string>>(new Set())
+  const [grouped, setGrouped] = useState(false); const [groupedIds, setGroupedIds] = useState<string[]>([]); const [groupAnchor, setGroupAnchor] = useState<string | null>(null)
   const ocrWorkerRef = useRef<Awaited<ReturnType<NonNullable<Window['Tesseract']>['createWorker']>> | null>(null)
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 8 } })); const activeTask = useMemo(() => tasks.find((task) => task.id === activeId), [activeId, tasks])
   useEffect(() => saveBoard({ quadrants, tasks }), [quadrants, tasks]); useEffect(() => { try { localStorage.setItem(LAYOUT_STORAGE_KEY, layoutMode); localStorage.setItem(ARRANGEMENT_STORAGE_KEY, arrangementMode) } catch { /* storage may be unavailable */ } }, [layoutMode, arrangementMode])
@@ -93,6 +105,15 @@ function App() {
     setSelectedIds((prev) => { const next = new Set(prev); if (allSelected) ids.forEach((id) => next.delete(id)); else ids.forEach((id) => next.add(id)); return next })
   }
   const toggleExpandArea = (id: string) => setExpandedAreas((prev) => { const next = new Set(prev); if (next.has(id)) next.delete(id); else next.add(id); return next })
+  const handleLongPress = (id: string) => {
+    if (!deleting || !selectedIds.has(id)) return
+    const ids = Array.from(selectedIds)
+    if (ids.length < 2) return
+    setGroupedIds(ids)
+    setGroupAnchor(tasks.find((task) => task.id === id)?.quadrantId ?? null)
+    setGrouped(true)
+  }
+  const cancelGroup = () => setGrouped(false)
   const deleteSelected = () => {
     if (!selectedIds.size) return
     if (!window.confirm(`确定删除选中的 ${selectedIds.size} 个词条吗？`)) return
@@ -118,7 +139,16 @@ function App() {
   }
   const handleDragStart = ({ active }: DragStartEvent) => setActiveId(String(active.id))
   const handleDragEnd = ({ active, over }: DragEndEvent) => {
-    setActiveId(null); if (!over || active.id === over.id) return
+    setActiveId(null); if (!over) return
+    if (active.id === GROUP_ID) {
+      const allAreas = [inbox, ...quadrants]
+      const targetArea = allAreas.some((area) => area.id === over.id) ? String(over.id) : tasks.find((task) => task.id === over.id)?.quadrantId
+      if (!targetArea) { setGrouped(false); return }
+      setBoard((board) => ({ ...board, tasks: board.tasks.map((task) => groupedIds.includes(task.id) ? { ...task, quadrantId: targetArea } : task) }))
+      setGrouped(false)
+      return
+    }
+    if (active.id === over.id) return
     setBoard((board) => { const activeTask = board.tasks.find((task) => task.id === active.id); if (!activeTask) return board; const targetTask = board.tasks.find((task) => task.id === over.id); const areas = [inbox, ...board.quadrants]; const targetArea = areas.some((area) => area.id === over.id) ? String(over.id) : targetTask?.quadrantId; if (!targetArea) return board; const remaining = board.tasks.filter((task) => task.id !== active.id); const targetIndex = targetTask ? remaining.findIndex((task) => task.id === targetTask.id) : remaining.map((task) => task.quadrantId).lastIndexOf(targetArea) + 1; remaining.splice(Math.max(0, targetIndex), 0, { ...activeTask, quadrantId: targetArea }); return { ...board, tasks: remaining } })
   }
   async function upscaleImage(file: File): Promise<Blob | File> {
@@ -305,6 +335,6 @@ function App() {
     }
   }
   const areas = [inbox, ...quadrants]
-  return <main className="app-shell"><div className="board-actions"><label className="upload-button"><span>识别图片</span><input type="file" accept="image/*" onChange={(event) => { const file = event.target.files?.[0]; if (file) void importImage(file); event.currentTarget.value = '' }} /></label><label className="upload-button upload-button--glm"><span>智能识别</span><input type="file" accept="image/*" onChange={(event) => { const file = event.target.files?.[0]; if (file) void importImageGlm(file); event.currentTarget.value = '' }} /></label><button className={`delete-mode-button ${deleting ? 'is-active' : ''}`} type="button" onClick={toggleDeleting}>{deleting ? '完成' : '删除'}</button>{deleting && <button className="delete-selected-button" type="button" onClick={deleteSelected} disabled={selectedIds.size === 0}>删除选中 ({selectedIds.size})</button>}{deleting && <button className="clear-all-button" type="button" onClick={clearAllTasks}>全部清除</button>}<button className="add-quadrant-button" type="button" onClick={addQuadrant}>+ 新增象限</button><div className="switches"><div className="layout-switch" role="group" aria-label="选择象限排列"><span className="layout-switch__label">排列</span><button className={arrangementMode === 'grid' ? 'is-selected' : ''} type="button" onClick={() => setArrangementMode('grid')}>2×2</button><button className={arrangementMode === 'stack' ? 'is-selected' : ''} type="button" onClick={() => setArrangementMode('stack')}>纵向</button></div><div className="layout-switch" role="group" aria-label="选择象限排版"><span className="layout-switch__label">排版</span><button className={layoutMode === 'default' ? 'is-selected' : ''} type="button" onClick={() => setLayoutMode('default')}>默认</button><button className={layoutMode === 'stacked' ? 'is-selected' : ''} type="button" onClick={() => setLayoutMode('stacked')}>叠放</button></div></div></div>{(ocrStatus || ocrError) && <p className={`ocr-message ${ocrError ? 'is-error' : ''}`}>{ocrError || ocrStatus}</p>}{pendingTitles && <div className="ocr-preview"><p className="ocr-preview__title">识别到 {pendingTitles.length} 条，可修改后导入：</p><div className="ocr-preview__list">{pendingTitles.map((title, index) => <div className="ocr-preview__row" key={index}><input value={title} onChange={(event) => updatePendingTitle(index, event.target.value)} /><button type="button" onClick={() => removePendingTitle(index)} aria-label="删除此行">×</button></div>)}</div><div className="ocr-preview__actions"><button type="button" onClick={confirmImport}>导入 ({pendingTitles.filter((title) => title.trim()).length})</button><button type="button" onClick={() => setPendingTitles(null)}>放弃</button></div></div>}<DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd}><div className={`quadrant-grid quadrant-grid--${arrangementMode} ${layoutMode === 'stacked' ? 'quadrant-grid--stacked' : ''}`}>{areas.map((area) => { const areaTasks = tasks.filter((task) => task.quadrantId === area.id); return <AreaPanel key={area.id} area={area} tasks={areaTasks} onRename={area.id === INBOX_ID ? undefined : (name) => setBoard((board) => ({ ...board, quadrants: board.quadrants.map((item) => item.id === area.id ? { ...item, name } : item) }))} onAdd={() => addTask(area.id)} onToggle={handleTaskClick} onDelete={(id) => setBoard((board) => ({ ...board, tasks: board.tasks.filter((task) => task.id !== id) }))} onRemove={area.deletable ? () => removeQuadrant(area.id) : undefined} selecting={deleting} selectedIds={selectedIds} onSelectArea={() => toggleSelectArea(areaTasks)} stacked={layoutMode === 'stacked'} expanded={expandedAreas.has(area.id)} onToggleExpand={() => toggleExpandArea(area.id)} /> })}</div><DragOverlay>{activeTask ? <TaskCard task={activeTask} /> : null}</DragOverlay></DndContext></main>
+  return <main className="app-shell"><div className="board-actions"><label className="upload-button"><span>识别图片</span><input type="file" accept="image/*" onChange={(event) => { const file = event.target.files?.[0]; if (file) void importImage(file); event.currentTarget.value = '' }} /></label><label className="upload-button upload-button--glm"><span>智能识别</span><input type="file" accept="image/*" onChange={(event) => { const file = event.target.files?.[0]; if (file) void importImageGlm(file); event.currentTarget.value = '' }} /></label><button className={`delete-mode-button ${deleting ? 'is-active' : ''}`} type="button" onClick={toggleDeleting}>{deleting ? '完成' : '选择'}</button>{deleting && <button className="delete-selected-button" type="button" onClick={deleteSelected} disabled={selectedIds.size === 0}>删除选中 ({selectedIds.size})</button>}{deleting && <button className="clear-all-button" type="button" onClick={clearAllTasks}>全部清除</button>}<button className="add-quadrant-button" type="button" onClick={addQuadrant}>+ 新增象限</button><div className="switches"><div className="layout-switch" role="group" aria-label="选择象限排列"><span className="layout-switch__label">排列</span><button className={arrangementMode === 'grid' ? 'is-selected' : ''} type="button" onClick={() => setArrangementMode('grid')}>2×2</button><button className={arrangementMode === 'stack' ? 'is-selected' : ''} type="button" onClick={() => setArrangementMode('stack')}>纵向</button></div><div className="layout-switch" role="group" aria-label="选择象限排版"><span className="layout-switch__label">排版</span><button className={layoutMode === 'default' ? 'is-selected' : ''} type="button" onClick={() => setLayoutMode('default')}>默认</button><button className={layoutMode === 'stacked' ? 'is-selected' : ''} type="button" onClick={() => setLayoutMode('stacked')}>叠放</button></div></div></div>{(ocrStatus || ocrError) && <p className={`ocr-message ${ocrError ? 'is-error' : ''}`}>{ocrError || ocrStatus}</p>}{pendingTitles && <div className="ocr-preview"><p className="ocr-preview__title">识别到 {pendingTitles.length} 条，可修改后导入：</p><div className="ocr-preview__list">{pendingTitles.map((title, index) => <div className="ocr-preview__row" key={index}><input value={title} onChange={(event) => updatePendingTitle(index, event.target.value)} /><button type="button" onClick={() => removePendingTitle(index)} aria-label="删除此行">×</button></div>)}</div><div className="ocr-preview__actions"><button type="button" onClick={confirmImport}>导入 ({pendingTitles.filter((title) => title.trim()).length})</button><button type="button" onClick={() => setPendingTitles(null)}>放弃</button></div></div>}<DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd}><div className={`quadrant-grid quadrant-grid--${arrangementMode} ${layoutMode === 'stacked' ? 'quadrant-grid--stacked' : ''}`}>{areas.map((area) => { const areaTasks = tasks.filter((task) => task.quadrantId === area.id); return <AreaPanel key={area.id} area={area} tasks={areaTasks} onRename={area.id === INBOX_ID ? undefined : (name) => setBoard((board) => ({ ...board, quadrants: board.quadrants.map((item) => item.id === area.id ? { ...item, name } : item) }))} onAdd={() => addTask(area.id)} onToggle={handleTaskClick} onDelete={(id) => setBoard((board) => ({ ...board, tasks: board.tasks.filter((task) => task.id !== id) }))} onRemove={area.deletable ? () => removeQuadrant(area.id) : undefined} selecting={deleting} selectedIds={selectedIds} onSelectArea={() => toggleSelectArea(areaTasks)} stacked={layoutMode === 'stacked'} expanded={expandedAreas.has(area.id)} onToggleExpand={() => toggleExpandArea(area.id)} grouped={grouped} groupedIds={groupedIds} groupAnchor={groupAnchor} onCancelGroup={cancelGroup} onLongPress={handleLongPress} /> })}</div><DragOverlay>{activeId === GROUP_ID ? <GroupCard count={groupedIds.length} onCancel={() => {}} /> : activeTask ? <TaskCard task={activeTask} /> : null}</DragOverlay></DndContext></main>
 }
 export default App
